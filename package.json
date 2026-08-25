@@ -1,0 +1,11 @@
+{
+  "name": "huggy-excel",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "check": "node --check app.js && node --check api.mjs && node --check worker.mjs && node --check server.mjs"
+  }
+}
