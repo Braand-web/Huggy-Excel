@@ -20,7 +20,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .promo { height: 36px; display: flex; align-items: center; justify-content: center; background: var(--terracotta); color: #fffaf5; font-size: 13px; position: relative; }
 .promo button { position: absolute; right: 20px; border: 0; background: transparent; color: white; font-size: 20px; line-height: 1; }
 .topbar { height: 64.8px; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; border-bottom: 1px solid var(--line); background: rgba(251,249,246,.92); backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 5; }
-.logo { border: 0; background: transparent; color: var(--ink); font-family: var(--serif); font-weight: 700; font-size: 25px; letter-spacing: -1px; padding: 0; }
+.logo { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--ink); font-family: var(--serif); font-weight: 700; font-size: 25px; letter-spacing: -1px; padding: 0; }
+.brand-icon { width: 25px; height: 25px; flex: 0 0 25px; border-radius: 7px; object-fit: cover; }
 .logo span { color: var(--terracotta-deep); }
 .top-actions { display: flex; align-items: center; gap: 12px; }
 .ghost-btn { border: 1px solid var(--line); background: rgba(255,255,255,.45); color: var(--soft); border-radius: 999px; padding: 8px 12px; font-size: 12px; }

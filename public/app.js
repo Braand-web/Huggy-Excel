@@ -76,7 +76,7 @@ async function hydrateAuth() {
 
 function header() {
   return `<div class="promo" ${state.promo ? '' : 'style="display:none"'}>${esc(t('promo'))}<button data-action="dismiss-promo" aria-label="Fermer">×</button></div>
-  <header class="topbar"><button class="logo" data-action="marketing">rowz<span>.ai</span></button><div class="top-actions"><button class="language-btn" data-action="language">${state.lang === 'fr' ? 'EN' : 'FR'}</button>${state.authUser ? `<button class="pill-btn trial" data-action="plans"><span>${state.generationCount}/${state.generationLimit} ${state.lang === 'fr' ? 'gén.' : 'gen.'}</span><span class="trial-chevron">⌄</span></button><button class="avatar" data-action="account" aria-label="Compte">${esc((state.authUser.email || 'U').slice(0, 1).toUpperCase())}</button>` : `<button class="ghost-btn" data-action="login">Connexion</button>`}</div></header>`;
+  <header class="topbar"><button class="logo" data-action="marketing"><img class="brand-icon" src="huggy-icon.png" alt="" aria-hidden="true"/>rowz<span>.ai</span></button><div class="top-actions"><button class="language-btn" data-action="language">${state.lang === 'fr' ? 'EN' : 'FR'}</button>${state.authUser ? `<button class="pill-btn trial" data-action="plans"><span>${state.generationCount}/${state.generationLimit} ${state.lang === 'fr' ? 'gén.' : 'gen.'}</span><span class="trial-chevron">⌄</span></button><button class="avatar" data-action="account" aria-label="Compte">${esc((state.authUser.email || 'U').slice(0, 1).toUpperCase())}</button>` : `<button class="ghost-btn" data-action="login">Connexion</button>`}</div></header>`;
 }
 
 function sidebar() {
