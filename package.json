@@ -7,6 +7,6 @@
     "start": "node server.mjs",
     "dev": "node server.mjs",
     "check": "node --check app.js && node --check api.mjs && node --check worker.mjs && node --check server.mjs",
-    "test": "node tests/workbook-ui.test.mjs"
+    "test": "node tests/workbook-ui.test.mjs && node tests/billing.test.mjs"
   }
 }

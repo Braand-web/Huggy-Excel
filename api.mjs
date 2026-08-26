@@ -192,12 +192,10 @@ async function callOpenRouter({ apiKey, prompt, model, effort, fileName }) {
 
 async function persist(env, table, row) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
-  try {
-    const response = await fetch(`${env.SUPABASE_URL}/rest/v1/${table}`, { method: 'POST', headers: supabaseHeaders(env, 'return=representation'), body: JSON.stringify(row) });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return Array.isArray(data) ? data[0] : data;
-  } catch { return null; }
+  const response = await fetch(`${env.SUPABASE_URL}/rest/v1/${table}`, { method: 'POST', headers: supabaseHeaders(env, 'return=representation'), body: JSON.stringify(row) });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.message || data?.error || `Supabase a répondu avec le statut ${response.status}.`);
+  return Array.isArray(data) ? data[0] : data;
 }
 
 function validSessionId(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '')); }
@@ -249,24 +247,102 @@ async function chariowRequest(env, path, options = {}) {
 }
 
 async function updateSubscription(env, lookup, changes) {
-  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return;
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return false;
   const params = Object.entries(lookup).map(([key, value]) => `${key}=eq.${encodeURIComponent(value)}`).join('&');
-  try {
-    const list = await fetch(`${env.SUPABASE_URL}/rest/v1/subscriptions?select=id&${params}&order=created_at.desc&limit=1`, { headers: supabaseHeaders(env) });
-    if (!list.ok) return;
-    const rows = await list.json();
-    if (!rows[0]?.id) return;
-    await fetch(`${env.SUPABASE_URL}/rest/v1/subscriptions?id=eq.${rows[0].id}`, { method: 'PATCH', headers: supabaseHeaders(env, 'return=minimal'), body: JSON.stringify({ ...changes, updated_at: new Date().toISOString() }) });
-  } catch { /* A delivery can be retried safely. */ }
+  const list = await fetch(`${env.SUPABASE_URL}/rest/v1/subscriptions?select=id,session_id,plan_slug,billing_cycle,status,provider_product_id,provider_sale_id,provider_license_id,customer_email,current_period_start,current_period_end,license_expires_at&${params}&order=created_at.desc&limit=1`, { headers: supabaseHeaders(env) });
+  if (!list.ok) throw new Error(`Recherche d’abonnement impossible (${list.status}).`);
+  const rows = await list.json();
+  if (!rows[0]?.id) return false;
+  if (!changes) return rows[0];
+  const patch = await fetch(`${env.SUPABASE_URL}/rest/v1/subscriptions?id=eq.${encodeURIComponent(rows[0].id)}`, { method: 'PATCH', headers: supabaseHeaders(env, 'return=minimal'), body: JSON.stringify({ ...changes, updated_at: new Date().toISOString() }) });
+  if (!patch.ok) throw new Error(`Mise à jour d’abonnement impossible (${patch.status}).`);
+  return rows[0];
 }
 
 async function claimWebhookDelivery(env, deliveryId, event, payload) {
-  if (!deliveryId || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return true;
+  if (!deliveryId || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return { claimed: true, test: !deliveryId };
   try {
     const response = await fetch(`${env.SUPABASE_URL}/rest/v1/billing_webhook_events`, { method: 'POST', headers: supabaseHeaders(env, 'return=minimal'), body: JSON.stringify({ delivery_id: deliveryId, event, payload }) });
-    if (response.status === 409) return 'duplicate';
-    return response.ok;
-  } catch { return false; }
+    if (response.ok) return { claimed: true };
+    if (response.status !== 409) return { claimed: false };
+    const existing = await fetch(`${env.SUPABASE_URL}/rest/v1/billing_webhook_events?select=processed_at&delivery_id=eq.${encodeURIComponent(deliveryId)}&limit=1`, { headers: supabaseHeaders(env) });
+    if (!existing.ok) return { claimed: false };
+    const rows = await existing.json();
+    return rows[0]?.processed_at ? { claimed: false, duplicate: true } : { claimed: true, retry: true };
+  } catch { return { claimed: false }; }
+}
+
+async function finishWebhookDelivery(env, deliveryId, error = null) {
+  if (!deliveryId || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return;
+  const changes = error
+    ? { processing_error: String(error.message || error).slice(0, 1000), processed_at: null }
+    : { processing_error: null, processed_at: new Date().toISOString() };
+  await fetch(`${env.SUPABASE_URL}/rest/v1/billing_webhook_events?delivery_id=eq.${encodeURIComponent(deliveryId)}`, { method: 'PATCH', headers: supabaseHeaders(env, 'return=minimal'), body: JSON.stringify(changes) });
+}
+
+async function saveCheckoutSubscription(env, row) {
+  const existing = await updateSubscription(env, {
+    session_id: row.session_id,
+    plan_slug: row.plan_slug,
+    billing_cycle: row.billing_cycle,
+    status: 'pending_checkout',
+  }, row);
+  return existing || persist(env, 'subscriptions', row);
+}
+
+async function reconcileChariowSubscription(env, details) {
+  const { event, product, productId, saleId, licenseId, sessionId, customerEmail, license } = details;
+  const active = event === 'successful.sale' || event === 'license.issued' || event === 'license.activated';
+  const cancelled = event === 'abandoned.sale' || event === 'failed.sale' || event === 'license.expired' || event === 'license.revoked';
+  const nearingExpiry = event === 'license.nearing_expiry';
+  if (!active && !cancelled && !nearingExpiry) return { ignored: 'unsupported_event' };
+
+  const candidates = [
+    saleId ? { provider_sale_id: saleId } : null,
+    licenseId ? { provider_license_id: licenseId } : null,
+    product && validSessionId(sessionId) ? { session_id: sessionId, plan_slug: product.plan, billing_cycle: product.billing } : null,
+    product && customerEmail ? { customer_email: customerEmail, plan_slug: product.plan, billing_cycle: product.billing } : null,
+  ].filter(Boolean);
+  let subscription = null;
+  for (const lookup of candidates) {
+    subscription = await updateSubscription(env, lookup, null);
+    if (subscription) break;
+  }
+
+  if (!subscription && active && product && validSessionId(sessionId)) {
+    subscription = await persist(env, 'subscriptions', {
+      session_id: sessionId,
+      plan_slug: product.plan,
+      billing_cycle: product.billing,
+      status: 'pending_checkout',
+      provider: 'chariow',
+      provider_product_id: productId,
+      provider_sale_id: saleId || null,
+      provider_license_id: licenseId || null,
+      customer_email: customerEmail || null,
+    });
+  }
+  if (!subscription) return { ignored: product ? 'subscription_not_found' : 'unknown_product' };
+
+  const resolvedPlan = product || BILLING_CATALOG[subscription.plan_slug]?.[subscription.billing_cycle || 'monthly'];
+  const now = new Date();
+  const explicitExpiry = license.expires_at || license.expiresAt || null;
+  const entitlementEnd = explicitExpiry || (active && resolvedPlan ? new Date(now.getTime() + resolvedPlan.days * 86400000).toISOString() : subscription.license_expires_at || subscription.current_period_end || null);
+  const changes = {
+    status: active ? 'active' : cancelled ? 'cancelled' : subscription.status,
+    provider: 'chariow',
+    provider_product_id: productId || subscription.provider_product_id || null,
+    provider_sale_id: saleId || subscription.provider_sale_id || null,
+    provider_license_id: licenseId || subscription.provider_license_id || null,
+    license_status: license.status || (active ? 'active' : cancelled ? 'inactive' : null),
+    license_expires_at: entitlementEnd,
+    current_period_start: active ? subscription.current_period_start || now.toISOString() : undefined,
+    current_period_end: entitlementEnd,
+    customer_email: customerEmail || subscription.customer_email || null,
+  };
+  Object.keys(changes).forEach(key => changes[key] === undefined && delete changes[key]);
+  await updateSubscription(env, { id: subscription.id }, changes);
+  return { updated: true, status: changes.status };
 }
 
 function constantTimeEqual(left, right) {
@@ -293,37 +369,38 @@ async function handleChariowWebhook(request, env) {
   if (!await verifyChariowSignature(rawBody, request.headers.get('x-chariow-signature'), env.CHARIOW_WEBHOOK_SECRET)) return json({ error: 'Signature webhook invalide.' }, 401);
   let payload;
   try { payload = JSON.parse(rawBody); } catch { return json({ error: 'Charge utile webhook invalide.' }, 400); }
-  const event = String(payload.event || payload.type || '').toLowerCase();
+  const event = String(payload.event || payload.type || request.headers.get('x-pulse-event') || '').trim().toLowerCase();
   const deliveryId = request.headers.get('x-pulse-delivery-id') || request.headers.get('x-webhook-id') || '';
   const delivery = await claimWebhookDelivery(env, deliveryId, event, payload);
-  if (delivery === 'duplicate') return json({ ok: true, duplicate: true });
-  if (!delivery) return json({ error: 'Événement webhook non enregistré.' }, 500);
+  if (delivery.duplicate) return json({ ok: true, duplicate: true });
+  if (!delivery.claimed) return json({ error: 'Événement webhook non enregistré.' }, 500);
+  if (!deliveryId && payload.note) return json({ ok: true, test: true });
 
-  const data = payload.data || payload;
-  const sale = data.sale || payload.sale || {};
-  const productObject = data.product || sale.product || payload.product || {};
-  const license = data.license || payload.license || {};
-  const customer = data.customer || sale.customer || payload.customer || {};
-  const productId = String(productObject.id || sale.product_id || data.product_id || '');
-  const product = planForProduct(env, productId);
-  const metadata = sale.custom_metadata || data.custom_metadata || payload.custom_metadata || {};
-  const customerEmail = String(customer.email || sale.customer_email || data.customer_email || '').trim().toLowerCase();
-  const sessionId = String(metadata.session_id || metadata.sessionId || '');
-  const lookup = validSessionId(sessionId) ? { session_id: sessionId } : customerEmail ? { customer_email: customerEmail } : null;
-
-  if (lookup && product) {
-    const active = (event.includes('sale') && (event.includes('success') || event.includes('paid'))) || (event.includes('license') && /issued|activated|created/.test(event));
-    const expired = /expired|revoked|refunded|cancelled|canceled/.test(event);
-    const now = new Date();
-    const entitlementEnd = license.expires_at || license.expiresAt || (active ? new Date(now.getTime() + product.days * 86400000).toISOString() : null);
-    await updateSubscription(env, { ...lookup, plan_slug: product.plan, billing_cycle: product.billing }, {
-      status: active ? 'active' : expired ? 'cancelled' : 'pending_checkout', provider: 'chariow', provider_product_id: productId,
-      provider_sale_id: sale.id || data.sale_id || null, provider_license_id: license.id || null,
-      license_status: license.status || (active ? 'active' : null), license_expires_at: entitlementEnd,
-      current_period_start: active ? now.toISOString() : null, current_period_end: entitlementEnd, customer_email: customerEmail || null,
-    });
+  try {
+    const data = payload.data || payload;
+    const sale = data.sale || payload.sale || {};
+    const productObject = data.product || sale.product || payload.product || {};
+    const license = data.license || payload.license || {};
+    const customer = data.customer || sale.customer || payload.customer || {};
+    const productId = String(productObject.id || sale.product_id || data.product_id || '').trim();
+    const metadata = sale.custom_metadata || data.custom_metadata || payload.custom_metadata || {};
+    const details = {
+      event,
+      productId,
+      product: planForProduct(env, productId),
+      saleId: String(sale.id || data.sale_id || '').trim(),
+      licenseId: String(license.id || data.license_id || '').trim(),
+      sessionId: String(metadata.session_id || metadata.sessionId || '').trim(),
+      customerEmail: String(customer.email || sale.customer_email || data.customer_email || '').trim().toLowerCase(),
+      license,
+    };
+    const result = await reconcileChariowSubscription(env, details);
+    await finishWebhookDelivery(env, deliveryId);
+    return json({ ok: true, ...result });
+  } catch (error) {
+    await finishWebhookDelivery(env, deliveryId, error).catch(() => {});
+    return json({ error: 'Synchronisation de l’abonnement impossible.' }, 500);
   }
-  return json({ ok: true });
 }
 
 function generationStream(env, { sessionId, prompt, fileName, fileText }) {
@@ -451,8 +528,6 @@ export async function handleApi(request, env) {
     if (!offer || !email) return json({ error: 'Compte Huggy sans adresse email valide.' }, 400);
     const productId = chariowProductId(env, planSlug, billing);
     if (!productId) return json({ error: 'Cette offre n’est pas encore configurée.' }, 503);
-    const pending = await persist(env, 'subscriptions', { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing, status: 'pending_checkout', provider: 'chariow', provider_product_id: productId, customer_email: email });
-    if (env.SUPABASE_URL && !pending) return json({ error: 'Impossible d’enregistrer la commande.' }, 503);
     const metadata = user.user_metadata || {};
     const firstName = String(metadata.first_name || metadata.firstName || '').trim();
     const lastName = String(metadata.last_name || metadata.lastName || '').trim();
@@ -460,14 +535,22 @@ export async function handleApi(request, env) {
     const countryCode = String(metadata.country_code || 'CI').trim().toUpperCase();
     if (!firstName || !lastName || phoneNumber.length < 6 || !/^[A-Z]{2}$/.test(countryCode)) return json({ error: 'Complète ton profil avec ton prénom, ton nom et ton téléphone avant de payer.' }, 400);
     try {
-      const result = await chariowRequest(env, '/checkout', { method: 'POST', body: JSON.stringify({ product_id: productId, email, first_name: firstName, last_name: lastName, phone: { number: phoneNumber, country_code: countryCode }, redirect_url: 'https://huggy.fun/?checkout=success', custom_metadata: { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing } }) });
+      const customerIp = String(request.headers.get('cf-connecting-ip') || '').trim();
+      const checkoutBody = { product_id: productId, email, first_name: firstName, last_name: lastName, phone: { number: phoneNumber, country_code: countryCode }, redirect_url: 'https://huggy.fun/?checkout=success&sale={sale_id}', custom_metadata: { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing } };
+      if (customerIp) checkoutBody.customer_ip = customerIp;
+      const result = await chariowRequest(env, '/checkout', { method: 'POST', body: JSON.stringify(checkoutBody) });
       const checkoutUrl = result.data?.payment?.checkout_url || result.data?.checkout_url || null;
-      if (!checkoutUrl) throw new Error('Lien de paiement indisponible.');
-      return json({ checkoutUrl, step: result.data?.step || 'payment', customerEmail: email });
+      const step = String(result.data?.step || 'payment');
+      const saleId = String(result.data?.purchase?.id || result.data?.sale?.id || '').trim();
+      if (step === 'payment' && !checkoutUrl) throw new Error('Lien de paiement indisponible.');
+      if (step !== 'payment') throw new Error(result.data?.message || 'Ce produit ne peut pas ouvrir un nouveau paiement.');
+      const pending = await saveCheckoutSubscription(env, { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing, status: 'pending_checkout', provider: 'chariow', provider_product_id: productId, provider_sale_id: saleId || null, provider_license_id: null, license_status: null, license_expires_at: null, current_period_start: null, current_period_end: null, customer_email: email });
+      if (env.SUPABASE_URL && !pending) throw new Error('Impossible d’enregistrer la commande.');
+      return json({ checkoutUrl, step, customerEmail: email });
     } catch (error) { return json({ error: error.message || 'Impossible de préparer le paiement.' }, 502); }
   }
 
   return json({ error: 'Route API introuvable.' }, 404);
 }
 
-export { BILLING_CATALOG, PLAN_CATALOG };
+export { BILLING_CATALOG, PLAN_CATALOG, planForProduct, verifyChariowSignature };
