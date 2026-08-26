@@ -6,7 +6,7 @@
   "workers_dev": true,
   "routes": [
     { "pattern": "huggy.fun", "custom_domain": true },
-    { "pattern": "www.huggy.fun", "custom_domain": true }
+    { "pattern": "www.huggy.fun/*", "zone_name": "huggy.fun" }
   ],
   "assets": {
     "directory": "./public",
