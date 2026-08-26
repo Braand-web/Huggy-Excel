@@ -231,8 +231,8 @@ function generationStream(env, { sessionId, prompt, fileName, fileText }) {
           const modelPrompt = fileText ? `${prompt}\n\nVoici le contenu CSV du fichier joint. Utilise-le comme source de vérité et conserve les données utiles dans le classeur :\n\n${fileText}` : prompt;
           const result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt: modelPrompt, model: selection.model, effort: selection.effort, fileName });
           send('stage', { stage: 3, label: 'workbook_received' });
-          await finishGeneration(env, generationId, 'completed', result.workbook, result.usage);
           send('stage', { stage: 4, label: 'result_saved' });
+          await finishGeneration(env, generationId, 'completed', result.workbook, result.usage);
           const used = await usageCount(env, sessionId, entitlement.plan.slug);
           send('stage', { stage: 5, label: 'response_ready' });
           send('complete', { workbook: result.workbook, account: { plan: entitlement.plan.slug, generationLimit: entitlement.plan.generationLimit, used, remaining: Math.max(0, entitlement.plan.generationLimit - used) } });
