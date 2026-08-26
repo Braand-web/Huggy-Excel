@@ -38,7 +38,7 @@ Les droits et le routage de capacité sont déterminés exclusivement par le Wor
 
 Le catalogue est synchronisé dans `public.plans` : Free (1 génération), Starter (4 900 FCFA/mois ou 46 900 FCFA/an), Pro (14 900 FCFA/mois ou 142 900 FCFA/an) et Business (59 900 FCFA/mois ou 574 900 FCFA/an).
 
-Le paiement crée une commande Chariow. Le Pulse signé active automatiquement le droit dans `public.subscriptions`; les quotas payants sont renouvelés chaque mois tant que la licence reste valide.
+Le CTA prépare le droit côté Worker puis ouvre directement la page produit Chariow correspondante. Le Pulse signé active automatiquement le droit dans `public.subscriptions` en rapprochant l’email du compte; les quotas payants sont renouvelés chaque mois tant que la licence reste valide.
 
 ## Cloudflare
 

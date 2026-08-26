@@ -273,25 +273,16 @@ export async function handleApi(request, env) {
     const planSlug = String(body.plan || '');
     const billing = body.billing === 'annual' ? 'annual' : 'monthly';
     const offer = BILLING_CATALOG[planSlug]?.[billing];
-    const email = String(body.email || '').trim().toLowerCase();
-    const firstName = String(body.firstName || '').trim();
-    const lastName = String(body.lastName || '').trim();
-    const phoneNumber = String(body.phoneNumber || '').replace(/\D/g, '');
-    const countryCode = String(body.countryCode || '').trim().toUpperCase();
     const user = await authenticatedUser(env, request);
     if (!user) return json({ error: 'Connecte-toi pour continuer le paiement.' }, 401);
     const sessionId = user.id;
-    if (!offer || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !firstName || !lastName || phoneNumber.length < 6 || !/^[A-Z]{2}$/.test(countryCode)) return json({ error: 'Renseigne des coordonnées de paiement valides.' }, 400);
+    const email = String(user.email || '').trim().toLowerCase();
+    if (!offer || !email) return json({ error: 'Compte Huggy sans adresse email valide.' }, 400);
     const productId = chariowProductId(env, planSlug, billing);
     if (!productId) return json({ error: 'Cette offre n’est pas encore configurée.' }, 503);
     const pending = await persist(env, 'subscriptions', { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing, status: 'pending_checkout', provider: 'chariow', provider_product_id: productId, customer_email: email });
     if (env.SUPABASE_URL && !pending) return json({ error: 'Impossible d’enregistrer la commande.' }, 503);
-    try {
-      const result = await chariowRequest(env, '/checkout', { method: 'POST', body: JSON.stringify({ product_id: productId, email, first_name: firstName, last_name: lastName, phone: { number: phoneNumber, country_code: countryCode }, redirect_url: 'https://huggy.fun/?checkout=success', custom_metadata: { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing } }) });
-      const checkoutUrl = result.data?.payment?.checkout_url || result.data?.checkout_url || null;
-      if (!checkoutUrl) throw new Error('Lien de paiement indisponible.');
-      return json({ checkoutUrl, step: result.data?.step || null });
-    } catch (error) { return json({ error: error.message || 'Impossible de préparer le paiement.' }, 502); }
+    return json({ checkoutUrl: `https://gerepwmw.mychariow.shop/${productId}`, step: 'chariow_storefront', customerEmail: email });
   }
 
   return json({ error: 'Route API introuvable.' }, 404);
