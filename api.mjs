@@ -214,6 +214,38 @@ async function handleChariowWebhook(request, env) {
   return json({ ok: true });
 }
 
+function generationStream(env, { sessionId, prompt, fileName, fileText }) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = (event, data) => controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      (async () => {
+        let generationId;
+        try {
+          send('stage', { stage: 1, label: 'request_received' });
+          const entitlement = await getEntitlement(env, sessionId);
+          const selection = chooseModel(prompt, entitlement.plan.slug);
+          generationId = await claimGeneration(env, { sessionId, plan: entitlement.plan, prompt, model: selection.model, effort: selection.effort });
+          if (env.SUPABASE_URL && !generationId) { send('error', { error: 'Ton quota de générations est atteint. Choisis un plan ou attends son renouvellement.', status: 429 }); return; }
+          send('stage', { stage: 2, label: 'ai_started' });
+          const modelPrompt = fileText ? `${prompt}\n\nVoici le contenu CSV du fichier joint. Utilise-le comme source de vérité et conserve les données utiles dans le classeur :\n\n${fileText}` : prompt;
+          const result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt: modelPrompt, model: selection.model, effort: selection.effort, fileName });
+          send('stage', { stage: 3, label: 'workbook_received' });
+          await finishGeneration(env, generationId, 'completed', result.workbook, result.usage);
+          send('stage', { stage: 4, label: 'result_saved' });
+          const used = await usageCount(env, sessionId, entitlement.plan.slug);
+          send('stage', { stage: 5, label: 'response_ready' });
+          send('complete', { workbook: result.workbook, account: { plan: entitlement.plan.slug, generationLimit: entitlement.plan.generationLimit, used, remaining: Math.max(0, entitlement.plan.generationLimit - used) } });
+        } catch (error) {
+          await finishGeneration(env, generationId, 'failed');
+          send('error', { error: error.message || 'Impossible de terminer la génération.', status: 502 });
+        } finally { controller.close(); }
+      })();
+    },
+  });
+  return new Response(stream, { headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no', 'access-control-allow-origin': '*' } });
+}
+
 export async function handleApi(request, env) {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/')) return null;
@@ -250,6 +282,7 @@ export async function handleApi(request, env) {
     if (!user) return json({ error: 'Connecte-toi pour générer un fichier.' }, 401);
     const sessionId = user.id;
     if (!prompt || prompt.length > 6000) return json({ error: 'La demande doit contenir entre 1 et 6000 caractères.' }, 400);
+    if (request.headers.get('accept')?.includes('text/event-stream')) return generationStream(env, { sessionId, prompt, fileName: String(body.fileName || '').slice(0, 255), fileText });
     const entitlement = await getEntitlement(env, sessionId);
     const selection = chooseModel(prompt, entitlement.plan.slug, body.mode);
     let generationId;
