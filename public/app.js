@@ -103,7 +103,7 @@ function errorNotice() { return `${state.notice ? `<div class="error-notice" sty
 function emptyState() { return `<div class="empty-center">${errorNotice()}<h1>${t('hello')}</h1><p>${t('emptySubtitle')}</p>${composer(false)}${quickActions(false)}</div>`; }
 function fileState() { const f = state.files.find(x => x.id === state.current) || state.files[0]; if (!f) return emptyState(); return `<div class="file-view">${errorNotice()}<div class="prompt-bubble">${esc(f.prompt)}</div><div class="file-card"><div class="file-card-icon">▤</div><div class="file-card-copy"><strong>${esc(f.name)}</strong><span>v${f.version}</span><div class="file-actions"><button data-action="preview">${t('preview')}</button><button data-action="download">${t('download')}</button><button data-action="continue">${t('continue')}</button></div></div></div>${composer(true)}${quickActions(true)}<p class="context">${t('context')} : ${esc(f.name)} (v${f.version})</p></div>`; }
 
-function generationState() { const steps = state.lang === 'fr' ? ['Analyse de votre demande…','Écriture du code Excel','Formules et mises en forme','Tableau de bord et synthèse','Préparation de l’aperçu'] : ['Analyzing your request…','Writing Excel code','Formulas and formatting','Dashboard and summary','Preparing preview']; return `<div class="status"><div class="status-icon">✨</div><h2>${state.lang === 'fr' ? 'Rowz construit votre fichier' : 'Rowz is building your file'}</h2><p>${state.lang === 'fr' ? 'Ça prend généralement quelques secondes' : 'This usually takes a few seconds'}</p><div class="status-quote">« ${esc(state.prompt || state.editPrompt)} »</div><ul class="steps">${steps.map((s,i)=>`<li class="${i < state.progress ? 'done' : ''}"><span class="step-dot">${i < state.progress ? '✓' : i + 1}</span>${s}</li>`).join('')}</ul></div>`; }
+function generationState() { const steps = state.lang === 'fr' ? ['Analyse de votre demande…','Écriture du code Excel','Formules et mises en forme','Tableau de bord et synthèse','Préparation de l’aperçu'] : ['Analyzing your request…','Writing Excel code','Formulas and formatting','Dashboard and summary','Preparing preview']; const active = Math.min(state.progress, steps.length - 1); const percent = Math.min(100, Math.max(8, Math.round((state.progress / steps.length) * 100))); return `<div class="status"><div class="status-icon">✨</div><h2>${state.lang === 'fr' ? 'Huggy construit votre fichier' : 'Huggy is building your file'}</h2><p>${state.lang === 'fr' ? 'Ça prend généralement 30 à 60 secondes' : 'This usually takes 30 to 60 seconds'}</p><div class="status-quote">« ${esc(state.prompt || state.editPrompt)} »</div><div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><div class="progress-fill" style="width:${percent}%"></div></div><ul class="steps">${steps.map((s,i)=>`<li class="${i < state.progress ? 'done' : i === active ? 'active' : ''}"><span class="step-dot">${i < state.progress ? '✓' : i === active ? '<i></i>' : i + 1}</span>${s}</li>`).join('')}</ul><p class="status-note">${state.lang === 'fr' ? 'Ne ferme pas cette page — ton fichier arrive.' : 'Keep this page open — your file is on the way.'}</p></div>`; }
 
 function dashboard() { return `${header()}<div class="workspace ${state.collapsed ? 'collapsed' : ''}">${sidebar()}<main class="canvas"><div class="canvas-inner ${state.files.length && state.current ? 'has-file' : ''}">${state.generating ? generationState() : (state.files.length && state.current ? fileState() : emptyState())}</div></main></div><footer class="site-footer">© 2026 rowz.ai · ${state.lang === 'fr' ? 'Vos tableurs, en langage naturel.' : 'Your spreadsheets, in plain English.'}　·　FAQ　·　Mentions légales　·　CGU　·　Confidentialité</footer>${state.menu ? `<div class="menu profile-menu"><div class="menu-user"><div class="menu-avatar">${esc((state.authUser?.email || 'U').slice(0, 1).toUpperCase())}</div><div class="menu-email">${esc(state.authUser?.email || '')}</div></div><button data-action="account-manage">⚙　Manage account</button><button data-action="logout">↪　Sign out</button><div class="clerk-mini">Secured by <b>Huggy</b></div></div>` : ''}`; }
 
@@ -146,23 +146,21 @@ async function startGeneration() {
   if (!state.authUser) { state.modal = 'auth'; state.authMode = 'login'; render(); return; }
   if (state.generationCount >= state.generationLimit) { state.modal = 'paywall'; render(); return; }
   state.generating = true; state.progress = 0; state.error = ''; state.notice = ''; render();
-  const startedAt = Date.now();
-  let tick = 0;
-  const timer = setInterval(() => { tick += 1; state.progress = Math.min(4, tick); render(); }, 460);
+  let generationStopped = false;
+  const stageFlow = (async () => { for (const duration of [6000, 7500, 7500, 7000]) { await new Promise(resolve => setTimeout(resolve, duration)); if (generationStopped) return; state.progress += 1; render(); } })();
   try {
     const response = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ prompt, fileName: state.attachedFile?.name || '', fileText: state.attachedFile?.text || '' }) });
     const payload = await response.json();
     if (!response.ok) { const error = new Error(payload.error || 'La génération a échoué.'); error.status = response.status; throw error; }
-    const remaining = Math.max(0, 2200 - (Date.now() - startedAt));
-    if (remaining) await new Promise(resolve => setTimeout(resolve, remaining));
-    clearInterval(timer); state.progress = 5; render();
+    await stageFlow;
+    state.progress = 5; render();
     await new Promise(resolve => setTimeout(resolve, 260));
     const id = crypto.randomUUID();
     const title = payload.workbook?.title || 'classeur-ia';
     const file = { id, name: `${title.toLowerCase().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'classeur-ia'}.xlsx`, prompt, version: 1, workbook: payload.workbook };
     state.files = [...state.files.filter(f => f.id !== id), file]; state.current = id; state.plan = payload.account?.plan || state.plan; state.generationLimit = payload.account?.generationLimit || state.generationLimit; state.generationCount = payload.account?.used ?? (state.generationCount + 1); state.trialUsed = state.generationCount >= state.generationLimit; state.generating = false; state.prompt = ''; state.editPrompt = ''; state.attachedFile = null; save(); render();
   } catch (error) {
-    clearInterval(timer); state.generating = false; state.error = error.message || 'Une erreur est survenue.'; if (error.status === 429) state.modal = 'paywall'; render();
+    generationStopped = true; state.generating = false; state.error = error.message || 'Une erreur est survenue.'; if (error.status === 429) state.modal = 'paywall'; render();
   }
 }
 

@@ -106,10 +106,17 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .status h2 { font: 600 25px var(--serif); margin: 6px 0; }
 .status p { color: var(--soft); font-size: 13px; }
 .status-quote { background: var(--cream-deep); padding: 10px 13px; border-radius: 10px; font-size: 12px; }
+.progress-track { height: 7px; margin: 24px 0 20px; border-radius: 999px; background: #e7e3dc; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: inherit; background: var(--terracotta); transition: width 650ms ease; }
 .steps { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 8px; text-align: left; }
 .steps li { display: flex; gap: 10px; align-items: center; color: var(--soft); font-size: 12px; }
 .steps li.done { color: #3d8c55; }
+.steps li.active { color: var(--ink); font-weight: 600; }
 .step-dot { width: 21px; height: 21px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; font-size: 11px; }
+.steps li.active .step-dot { border: 0; background: var(--terracotta); color: #fff; }
+.steps li.active .step-dot i { width: 7px; height: 7px; border-radius: 50%; background: #fff; display: block; animation: pulse-dot 1.1s ease-in-out infinite; }
+.status-note { margin: 24px 0 0; font-size: 12px !important; }
+@keyframes pulse-dot { 0%, 100% { opacity: .45; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
 
 .marketing { min-height: calc(100vh - 101px); }
 .marketing .hero { padding: 92px 24px 80px; text-align: center; max-width: 860px; margin: 0 auto; }
