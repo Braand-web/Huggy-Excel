@@ -40,19 +40,129 @@ async function authenticatedUser(env, request) {
   } catch { return null; }
 }
 
-function fallbackWorkbook(prompt) {
-  const isBudget = /budget|dépense|depense|finance|mensuel/i.test(prompt);
+function configuredAdminEmails(env) {
+  return String(env.HUGGY_ADMIN_EMAILS || '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean);
+}
+
+function isAdminUser(env, user) {
+  const metadata = user?.app_metadata || {};
+  const roles = Array.isArray(metadata.roles) ? metadata.roles : [metadata.role];
+  return roles.some(role => String(role || '').toLowerCase() === 'admin') || configuredAdminEmails(env).includes(String(user?.email || '').trim().toLowerCase());
+}
+
+async function requireAdmin(env, request) {
+  const user = await authenticatedUser(env, request);
+  if (!user) return { response: json({ error: 'Connexion requise.' }, 401) };
+  if (!isAdminUser(env, user)) return { response: json({ error: 'Accès administrateur requis.' }, 403) };
+  return { user };
+}
+
+async function adminSupabaseRequest(env, path, options = {}) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('Supabase n’est pas configuré.');
+  const response = await fetch(`${env.SUPABASE_URL}${path}`, { ...options, headers: { ...supabaseHeaders(env), ...(options.headers || {}) } });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.message || payload.error || `Supabase a répondu avec le statut ${response.status}.`);
+  return payload;
+}
+
+async function listAuthUsers(env) {
+  const users = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const payload = await adminSupabaseRequest(env, `/auth/v1/admin/users?page=${page}&per_page=1000`);
+    const batch = Array.isArray(payload.users) ? payload.users : [];
+    users.push(...batch);
+    if (batch.length < 1000) break;
+  }
+  return users;
+}
+
+async function listAdminTable(env, table, select, limit = 500, order = 'created_at') {
+  try {
+    const query = `?select=${encodeURIComponent(select)}&order=${encodeURIComponent(order)}.desc&limit=${limit}`;
+    const rows = await adminSupabaseRequest(env, `/rest/v1/${table}${query}`);
+    return Array.isArray(rows) ? rows : [];
+  } catch { return []; }
+}
+
+function adminDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+async function adminSnapshot(env, admin) {
+  const [authUsers, generations, subscriptions, plans, webhookEvents] = await Promise.all([
+    listAuthUsers(env),
+    listAdminTable(env, 'generations', 'id,session_id,plan_slug,prompt,model,effort,status,created_at,input_tokens,output_tokens', 500),
+    listAdminTable(env, 'subscriptions', 'id,session_id,plan_slug,status,billing_cycle,provider,provider_product_id,provider_sale_id,provider_license_id,license_status,license_expires_at,current_period_start,current_period_end,customer_email,created_at,updated_at', 500),
+    listAdminTable(env, 'plans', 'slug,name,monthly_price_cents,generation_limit,features,active,sort_order,updated_at', 20),
+    listAdminTable(env, 'billing_webhook_events', 'id,delivery_id,event,received_at', 30, 'received_at'),
+  ]);
+  const userById = new Map(authUsers.map(user => [user.id, user]));
+  const planBySlug = new Map(plans.map(plan => [plan.slug, plan]));
+  const now = Date.now();
+  const activeSubscription = subscription => subscription.status === 'active' && (!subscription.license_expires_at && !subscription.current_period_end || Date.parse(subscription.license_expires_at || subscription.current_period_end) > now);
+  const today = new Date().toISOString().slice(0, 10);
+  const activeSubscriptions = subscriptions.filter(activeSubscription);
+  const mrrCents = activeSubscriptions.reduce((total, subscription) => {
+    const offer = BILLING_CATALOG[subscription.plan_slug]?.[subscription.billing_cycle || 'monthly'];
+    return total + (offer ? Math.round(offer.amount / (offer.days > 31 ? 12 : 1)) : Number(planBySlug.get(subscription.plan_slug)?.monthly_price_cents || 0));
+  }, 0);
+  const userSummary = authUsers.map(user => {
+    const subscription = subscriptions.find(item => item.session_id === user.id && activeSubscription(item));
+    const userGenerations = generations.filter(item => item.session_id === user.id);
+    return { id: user.id, email: user.email || '', createdAt: adminDate(user.created_at), lastSignInAt: adminDate(user.last_sign_in_at), confirmedAt: adminDate(user.confirmed_at), plan: subscription?.plan_slug || 'free', generationCount: userGenerations.length, provider: user.app_metadata?.provider || null };
+  }).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  const generationSummary = generations.map(generation => ({ ...generation, email: userById.get(generation.session_id)?.email || subscriptions.find(item => item.session_id === generation.session_id)?.customer_email || 'Utilisateur inconnu', createdAt: adminDate(generation.created_at) }));
+  const subscriptionSummary = subscriptions.map(subscription => ({ ...subscription, email: userById.get(subscription.session_id)?.email || subscription.customer_email || 'Utilisateur inconnu', planName: planBySlug.get(subscription.plan_slug)?.name || subscription.plan_slug, createdAt: adminDate(subscription.created_at), updatedAt: adminDate(subscription.updated_at), expiresAt: adminDate(subscription.license_expires_at || subscription.current_period_end) }));
   return {
-    title: isBudget ? 'budget-mensuel' : 'suivi-ventes',
-    summary: isBudget ? 'Budget mensuel organisé par catégorie.' : 'Suivi des ventes avec totaux calculés.',
-    sheets: [{ name: isBudget ? 'budget' : 'sales', columns: isBudget ? ['Catégorie', 'Mois', 'Montant', 'Statut'] : ['Date', 'Produit', 'Quantité', 'Prix unitaire', 'Total'], rows: isBudget ? [['Catégorie', 'Mois', 'Montant', 'Statut'], ['Logement', 'Janvier', '900', 'Prévu'], ['Transport', 'Janvier', '180', 'Prévu'], ['Logiciels', 'Janvier', '75', 'Payé']] : [['Date', 'Produit', 'Quantité', 'Prix unitaire', 'Total'], ['2026-08-20', 'Produit exemple', '3', '49.90', '=C2*D2'], ['2026-08-21', 'Produit premium', '2', '88.00', '=C3*D3']] }],
-    formulas: ['Total = Quantité × Prix unitaire'], notes: ['Ajoute tes propres données puis vérifie les hypothèses.'],
+    admin: { email: admin.email || '', userId: admin.id },
+    metrics: {
+      users: authUsers.length,
+      generations: generations.length,
+      generationsToday: generations.filter(item => String(item.created_at || '').startsWith(today)).length,
+      completedGenerations: generations.filter(item => item.status === 'completed').length,
+      failedGenerations: generations.filter(item => item.status === 'failed').length,
+      activeSubscriptions: activeSubscriptions.length,
+      pendingSubscriptions: subscriptions.filter(item => item.status === 'pending_checkout').length,
+      mrrCents,
+      webhookEvents: webhookEvents.length,
+    },
+    users: userSummary.slice(0, 200),
+    generations: generationSummary.slice(0, 200),
+    subscriptions: subscriptionSummary.slice(0, 200),
+    plans: plans.sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)),
+    system: { environment: 'production', supabase: Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY), openrouter: Boolean(env.OPENROUTER_API_KEY), chariow: Boolean(env.CHARIOW_API_KEY && Object.values(BILLING_CATALOG).every(cycle => Object.values(cycle).every(item => env[item.env]))), lastWebhookAt: webhookEvents[0]?.received_at ? adminDate(webhookEvents[0].received_at) : null },
   };
 }
 
 function parseJson(text) {
   const cleaned = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
   try { return JSON.parse(cleaned); } catch { const start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}'); if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1)); throw new Error('Réponse JSON invalide du service.'); }
+}
+
+function normalizeWorkbook(input, prompt) {
+  if (!input || typeof input !== 'object' || !Array.isArray(input.sheets)) throw new Error('Le moteur IA n’a pas renvoyé de classeur exploitable.');
+  const sheets = input.sheets.slice(0, 5).map((sheet, index) => {
+    if (!sheet || typeof sheet !== 'object') return null;
+    const columns = Array.isArray(sheet.columns) ? sheet.columns.slice(0, 20).map(value => String(value ?? '').slice(0, 240)) : [];
+    const rows = Array.isArray(sheet.rows) ? sheet.rows.slice(0, 100).filter(Array.isArray).map(row => row.slice(0, 20).map(value => {
+      if (value === null || value === undefined) return '';
+      return ['string', 'number', 'boolean'].includes(typeof value) ? value : JSON.stringify(value);
+    })) : [];
+    if (!rows.length && columns.length) rows.push(columns);
+    if (!rows.length) return null;
+    return { name: String(sheet.name || `Feuille ${index + 1}`).trim().slice(0, 60) || `Feuille ${index + 1}`, columns, rows };
+  }).filter(Boolean);
+  if (!sheets.length) throw new Error('Le moteur IA n’a produit aucune feuille de calcul.');
+  const requestedTitle = String(input.title || prompt || 'Classeur Huggy').trim();
+  return {
+    title: requestedTitle.slice(0, 120) || 'Classeur Huggy',
+    summary: String(input.summary || '').trim().slice(0, 600),
+    sheets,
+    formulas: Array.isArray(input.formulas) ? input.formulas.slice(0, 30).map(value => String(value).slice(0, 500)) : [],
+    notes: Array.isArray(input.notes) ? input.notes.slice(0, 30).map(value => String(value).slice(0, 500)) : [],
+  };
 }
 
 function getPlan(slug) { return PLAN_CATALOG.find(item => item.slug === slug) || PLAN_CATALOG[0]; }
@@ -66,7 +176,7 @@ function chooseModel(prompt, planSlug, requestedMode) {
 }
 
 async function callOpenRouter({ apiKey, prompt, model, effort, fileName }) {
-  if (!apiKey) return { workbook: fallbackWorkbook(prompt), usage: null };
+  if (!apiKey) throw new Error('Le moteur IA n’est pas configuré. Réessaie plus tard.');
   const userPrompt = `${prompt}${fileName ? `\nFichier joint à prendre en compte : ${fileName}` : ''}`;
   const base = { model, messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 3500, response_format: { type: 'json_object' } };
   if (effort) base.reasoning = { effort };
@@ -75,7 +185,9 @@ async function callOpenRouter({ apiKey, prompt, model, effort, fileName }) {
   if (!response.ok && effort) { const retry = { ...base }; delete retry.reasoning; response = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify(retry) }); }
   if (!response.ok) throw new Error(`Le service de génération a répondu avec le statut ${response.status}.`);
   const payload = await response.json();
-  return { workbook: parseJson(payload.choices?.[0]?.message?.content), usage: payload.usage || null };
+  const content = payload.choices?.[0]?.message?.content;
+  if (!content) throw new Error('Le moteur IA a renvoyé une réponse vide.');
+  return { workbook: normalizeWorkbook(parseJson(content), prompt), usage: payload.usage || null };
 }
 
 async function persist(env, table, row) {
@@ -249,9 +361,35 @@ function generationStream(env, { sessionId, prompt, fileName, fileText }) {
 export async function handleApi(request, env) {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/')) return null;
-  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type' } });
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,PATCH,OPTIONS', 'access-control-allow-headers': 'content-type,authorization' } });
   if (url.pathname === '/api/health' && request.method === 'GET') return json({ ok: true, service: 'huggy-excel', configured: Boolean(env.OPENROUTER_API_KEY && env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) });
   if (url.pathname === '/api/webhooks/chariow' && request.method === 'POST') return handleChariowWebhook(request, env);
+
+  if (url.pathname === '/api/admin/dashboard' && request.method === 'GET') {
+    const access = await requireAdmin(env, request);
+    if (access.response) return access.response;
+    try { return json(await adminSnapshot(env, access.user)); } catch (error) { return json({ error: error.message || 'Impossible de charger les données administrateur.' }, 503); }
+  }
+
+  if (url.pathname.startsWith('/api/admin/plans/') && request.method === 'PATCH') {
+    const access = await requireAdmin(env, request);
+    if (access.response) return access.response;
+    const slug = url.pathname.slice('/api/admin/plans/'.length);
+    if (!/^[a-z0-9-]{2,32}$/.test(slug)) return json({ error: 'Plan invalide.' }, 400);
+    let body;
+    try { body = await request.json(); } catch { return json({ error: 'Corps de requête invalide.' }, 400); }
+    const changes = {};
+    if (body.monthlyPriceCents !== undefined) { const value = Number(body.monthlyPriceCents); if (!Number.isInteger(value) || value < 0 || value > 100000000) return json({ error: 'Prix invalide.' }, 400); changes.monthly_price_cents = value; }
+    if (body.generationLimit !== undefined) { const value = Number(body.generationLimit); if (!Number.isInteger(value) || value < 1 || value > 1000000) return json({ error: 'Quota invalide.' }, 400); changes.generation_limit = value; }
+    if (body.active !== undefined) { if (typeof body.active !== 'boolean') return json({ error: 'Statut invalide.' }, 400); changes.active = body.active; }
+    if (body.features !== undefined) { if (!Array.isArray(body.features)) return json({ error: 'Fonctionnalités invalides.' }, 400); changes.features = body.features.map(item => String(item).trim()).filter(Boolean).slice(0, 10); }
+    if (!Object.keys(changes).length) return json({ error: 'Aucune modification.' }, 400);
+    changes.updated_at = new Date().toISOString();
+    try {
+      const rows = await adminSupabaseRequest(env, `/rest/v1/plans?slug=eq.${encodeURIComponent(slug)}`, { method: 'PATCH', headers: { prefer: 'return=representation' }, body: JSON.stringify(changes) });
+      return json({ plan: Array.isArray(rows) ? rows[0] || null : rows });
+    } catch (error) { return json({ error: error.message || 'Impossible de mettre à jour le plan.' }, 503); }
+  }
 
   if (url.pathname === '/api/plans' && request.method === 'GET') {
     let plans = PLAN_CATALOG;
