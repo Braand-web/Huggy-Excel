@@ -2,6 +2,7 @@ const app = document.querySelector('#app');
 const STORAGE_KEY = 'huggy-prototype-state';
 const AUTH_STORAGE_KEY = 'huggy-auth-session';
 const AUTH_CONFIG = window.HUGGY_AUTH_CONFIG || {};
+const ADMIN_INTENT = new URLSearchParams(window.location.search).get('admin') === '1';
 
 const copy = {
   fr: {
@@ -215,7 +216,7 @@ function landingV2() { return `${header()}<main class="marketing"><section class
 function brand(html) { return html.replaceAll('rowz<span>.ai</span>', 'Huggy').replaceAll('rowz.ai', 'Huggy').replaceAll('Rowz', 'Huggy').replaceAll('rowz.local', 'huggy.local'); }
 function resizeComposerTextarea(textarea) { if (!textarea) return; const maxHeight = 144; textarea.style.height = 'auto'; const contentHeight = Math.min(textarea.scrollHeight, maxHeight); textarea.style.height = `${Math.max(40, contentHeight)}px`; textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'; }
 function syncComposerSize() { if (!app?.querySelectorAll) return; app.querySelectorAll('[data-autogrow="true"]').forEach(resizeComposerTextarea); }
-function render() { app.innerHTML = brand(state.view === 'marketing' ? landingMinimal() : dashboard() + (state.modal ? modal() : '')); if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncComposerSize); else syncComposerSize(); }
+function render() { if (ADMIN_INTENT && state.authUser && !state.modal) { window.location.replace('/admin.html'); return; } app.innerHTML = brand(state.view === 'marketing' ? landingMinimal() : dashboard() + (state.modal ? modal() : '')); if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncComposerSize); else syncComposerSize(); }
 async function startGeneration() {
   const prompt = (state.prompt || state.editPrompt || '').trim();
   if (!prompt || state.generating) return;
@@ -289,4 +290,4 @@ app.addEventListener('click', e => { const el = e.target.closest('[data-action]'
 render();
 const checkoutReturned = new URLSearchParams(window.location.search).get('checkout') === 'success';
 if (checkoutReturned) { history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`); }
-hydrateAuth().then(() => { if (checkoutReturned && state.authUser) { syncEntitlement(true); setTimeout(() => syncEntitlement(true), 2500); setTimeout(() => syncEntitlement(true), 7000); } });
+hydrateAuth().then(() => { if (checkoutReturned && state.authUser) { syncEntitlement(true); setTimeout(() => syncEntitlement(true), 2500); setTimeout(() => syncEntitlement(true), 7000); } if (ADMIN_INTENT && !state.authUser) { state.view = 'marketing'; state.modal = 'auth'; state.authMode = 'login'; state.authError = ''; state.authMessage = ''; render(); } });
