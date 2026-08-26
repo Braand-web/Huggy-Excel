@@ -26,6 +26,10 @@ Les secrets de production sont enregistrés dans Cloudflare Workers, jamais dans
 
 La clé `SUPABASE_SERVICE_ROLE_KEY` doit rester strictement côté Worker. Elle ne doit jamais être exposée dans `app.js`, dans le navigateur ou dans une variable `NEXT_PUBLIC_*`.
 
+## Authentification
+
+L’inscription et la connexion email/mot de passe passent par Supabase Auth. La clé publishable utilisée par le navigateur se trouve dans `public/config.js`; elle ne donne aucun accès privilégié. Les routes de génération, de compte et de paiement exigent un access token Supabase valide, et la session est renouvelée automatiquement côté navigateur.
+
 ## Génération et contrôle des coûts
 
 Les droits et le routage de capacité sont déterminés exclusivement par le Worker. Le navigateur ne choisit ni le niveau de service ni le quota. Chaque génération est réservée atomiquement dans Supabase avant l’appel au fournisseur, puis marquée comme terminée ou échouée.

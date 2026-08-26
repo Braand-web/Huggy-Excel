@@ -29,6 +29,17 @@ function supabaseHeaders(env, prefer) {
   return { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'content-type': 'application/json', ...(prefer ? { prefer } : {}) };
 }
 
+async function authenticatedUser(env, request) {
+  const authorization = request.headers.get('authorization') || '';
+  if (!/^Bearer\s+\S+$/i.test(authorization) || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    const response = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization } });
+    if (!response.ok) return null;
+    const user = await response.json();
+    return user?.id && validSessionId(user.id) ? user : null;
+  } catch { return null; }
+}
+
 function fallbackWorkbook(prompt) {
   const isBudget = /budget|dépense|depense|finance|mensuel/i.test(prompt);
   return {
@@ -222,8 +233,9 @@ export async function handleApi(request, env) {
   }
 
   if (url.pathname === '/api/account' && request.method === 'GET') {
-    const sessionId = url.searchParams.get('sessionId');
-    if (!validSessionId(sessionId)) return json({ error: 'Session invalide.' }, 400);
+    const user = await authenticatedUser(env, request);
+    if (!user) return json({ error: 'Connexion requise.' }, 401);
+    const sessionId = user.id;
     const entitlement = await getEntitlement(env, sessionId);
     const used = await usageCount(env, sessionId, entitlement.plan.slug);
     return json({ plan: entitlement.plan.slug, planName: entitlement.plan.name, generationLimit: entitlement.plan.generationLimit, used, remaining: Math.max(0, entitlement.plan.generationLimit - used), billingCycle: entitlement.billingCycle, expiresAt: entitlement.expiresAt, status: entitlement.status });
@@ -233,8 +245,9 @@ export async function handleApi(request, env) {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Corps de requête invalide.' }, 400); }
     const prompt = String(body.prompt || '').trim();
-    const sessionId = String(body.sessionId || '');
-    if (!validSessionId(sessionId)) return json({ error: 'Session invalide. Recharge la page puis réessaie.' }, 400);
+    const user = await authenticatedUser(env, request);
+    if (!user) return json({ error: 'Connecte-toi pour générer un fichier.' }, 401);
+    const sessionId = user.id;
     if (!prompt || prompt.length > 6000) return json({ error: 'La demande doit contenir entre 1 et 6000 caractères.' }, 400);
     const entitlement = await getEntitlement(env, sessionId);
     const selection = chooseModel(prompt, entitlement.plan.slug, body.mode);
@@ -263,8 +276,10 @@ export async function handleApi(request, env) {
     const lastName = String(body.lastName || '').trim();
     const phoneNumber = String(body.phoneNumber || '').replace(/\D/g, '');
     const countryCode = String(body.countryCode || '').trim().toUpperCase();
-    const sessionId = String(body.sessionId || '');
-    if (!offer || !validSessionId(sessionId) || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !firstName || !lastName || phoneNumber.length < 6 || !/^[A-Z]{2}$/.test(countryCode)) return json({ error: 'Renseigne des coordonnées de paiement valides.' }, 400);
+    const user = await authenticatedUser(env, request);
+    if (!user) return json({ error: 'Connecte-toi pour continuer le paiement.' }, 401);
+    const sessionId = user.id;
+    if (!offer || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !firstName || !lastName || phoneNumber.length < 6 || !/^[A-Z]{2}$/.test(countryCode)) return json({ error: 'Renseigne des coordonnées de paiement valides.' }, 400);
     const productId = chariowProductId(env, planSlug, billing);
     if (!productId) return json({ error: 'Cette offre n’est pas encore configurée.' }, 503);
     const pending = await persist(env, 'subscriptions', { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing, status: 'pending_checkout', provider: 'chariow', provider_product_id: productId, customer_email: email });
