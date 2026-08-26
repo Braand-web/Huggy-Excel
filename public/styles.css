@@ -100,6 +100,10 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .file-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .file-actions button { height: 26px; min-height: 26px; max-height: 26px; border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 4px 10px; line-height: 16px; font-size: 11px; color: var(--ink); white-space: nowrap; }
 .file-actions button:last-child { color: var(--terracotta-deep); }
+.file-validation { display: flex; align-items: center; gap: 5px; margin-top: 7px; color: #39734b; font-size: 10px; line-height: 15px; }
+.file-validation i { width: 15px; height: 15px; display: inline-grid; place-items: center; border-radius: 50%; background: #e7f4e9; font-style: normal; font-weight: 700; }
+.file-validation.warning { color: #9a6531; }
+.file-validation.warning i { background: #fff0d9; }
 .context { text-align: center; color: var(--soft); font-size: 10px; line-height: 15px; margin: 4px 0 0; }
 .edit-composer { margin-top: auto; }
 
@@ -216,6 +220,25 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .sheet-tabs button { flex: 0 0 auto; border: 1px solid var(--line); background: white; border-radius: 999px; padding: 7px 11px; font-size: 12px; white-space: nowrap; }
 .sheet-tabs button.active { border-color: var(--ink); }
 .preview-banner { border: 1px solid #efc0a9; background: #fff2e9; color: var(--terracotta-deep); padding: 9px 11px; border-radius: 9px; font-size: 12px; margin-bottom: 12px; }
+.validation-card { display: flex; align-items: center; gap: 9px; padding: 10px 11px; margin-bottom: 12px; border: 1px solid #c9e4ce; border-radius: 10px; background: #f2faf3; color: #28633a; }
+.validation-card.warning { border-color: #efd6a7; background: #fff9ec; color: #8b5d27; }
+.validation-icon { width: 21px; height: 21px; display: grid; place-items: center; flex: 0 0 21px; border-radius: 50%; background: #dcefe0; font-size: 12px; font-weight: 700; }
+.validation-card.warning .validation-icon { background: #f9e6bd; }
+.validation-card div { display: grid; gap: 2px; min-width: 0; }
+.validation-card strong { font-size: 12px; }
+.validation-card span { font-size: 11px; color: inherit; opacity: .86; }
+.validation-card small { margin-left: auto; color: inherit; opacity: .7; font-size: 10px; white-space: nowrap; }
+.history-modal { width: min(680px, 100%); }
+.history-intro { margin: 0 0 16px; color: var(--soft); font-size: 13px; line-height: 1.55; }
+.history-list { display: grid; gap: 8px; }
+.history-row { display: grid; grid-template-columns: 116px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.history-row.current { border-color: #e5b398; background: #fff8f3; }
+.history-version { display: grid; gap: 2px; }
+.history-version span { font-weight: 700; font-size: 13px; }
+.history-version small { color: var(--soft); font-size: 10px; }
+.history-prompt { min-width: 0; overflow: hidden; color: var(--soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.history-current { color: var(--terracotta-deep); font-size: 11px; }
+@media (max-width:560px) { .history-row { grid-template-columns: 1fr auto; } .history-prompt { grid-column: 1 / -1; grid-row: 2; } .validation-card { align-items: flex-start; flex-wrap: wrap; } .validation-card small { margin-left: 30px; width: 100%; } }
 .grid-wrap { overflow: auto; border: 1px solid var(--line); background: white; }
 .grid-table { border-collapse: collapse; min-width: 600px; width: 100%; font-size: 12px; }
 .grid-table th, .grid-table td { border: 1px solid var(--line); padding: 8px 10px; min-width: 90px; text-align: left; }

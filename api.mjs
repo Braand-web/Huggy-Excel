@@ -19,7 +19,7 @@ const SYSTEM_PROMPT = `Tu es Huggy Excel, un agent spécialisé dans la créatio
   "formulas": ["formule ou règle importante"],
   "notes": ["hypothèse ou conseil utile"]
 }
-Crée au maximum 3 feuilles, 12 colonnes par feuille et 25 lignes par feuille. Les lignes doivent contenir les en-têtes en première ligne. Utilise des valeurs d'exemple réalistes quand l'utilisateur ne donne pas de données. N'invente jamais de secrets, de données personnelles ou de résultats financiers garantis. Pour les formules, écris des formules Excel en notation anglaise quand c'est pertinent.`;
+Crée au maximum 3 feuilles, 12 colonnes par feuille et 25 lignes par feuille. Les lignes doivent contenir les en-têtes en première ligne. Utilise des valeurs d'exemple réalistes quand l'utilisateur ne donne pas de données. N'invente jamais de secrets, de données personnelles ou de résultats financiers garantis. Pour les formules, écris des formules Excel en notation anglaise quand c'est pertinent. Si un classeur existant est fourni, conserve ses données et sa structure utiles, puis applique la modification demandée sans repartir de zéro. Ne supprime pas une feuille ou une colonne existante sans que l'utilisateur le demande.`;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'access-control-allow-origin': '*' } });
@@ -175,9 +175,10 @@ function chooseModel(prompt, planSlug, requestedMode) {
   return { model: plan.model, effort: plan.effort };
 }
 
-async function callOpenRouter({ apiKey, prompt, model, effort, fileName }) {
+async function callOpenRouter({ apiKey, prompt, model, effort, fileName, baseWorkbook }) {
   if (!apiKey) throw new Error('Le moteur IA n’est pas configuré. Réessaie plus tard.');
-  const userPrompt = `${prompt}${fileName ? `\nFichier joint à prendre en compte : ${fileName}` : ''}`;
+  const existingContext = baseWorkbook ? `\n\nVoici le classeur existant à modifier. Retourne une nouvelle version complète, en conservant les données non concernées :\n${JSON.stringify(baseWorkbook).slice(0, 30000)}` : '';
+  const userPrompt = `${prompt}${fileName ? `\nFichier joint à prendre en compte : ${fileName}` : ''}${existingContext}`;
   const base = { model, messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 3500, response_format: { type: 'json_object' } };
   if (effort) base.reasoning = { effort };
   const headers = { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', 'http-referer': 'https://huggy.fun', 'x-title': 'Huggy Excel' };
@@ -406,7 +407,7 @@ async function handleChariowWebhook(request, env) {
   }
 }
 
-function generationStream(env, { sessionId, prompt, fileName, fileText }) {
+function generationStream(env, { sessionId, prompt, fileName, fileText, baseWorkbook }) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
@@ -421,7 +422,7 @@ function generationStream(env, { sessionId, prompt, fileName, fileText }) {
           if (env.SUPABASE_URL && !generationId) { send('error', { error: 'Ton quota de générations est atteint. Choisis un plan ou attends son renouvellement.', status: 429 }); return; }
           send('stage', { stage: 2, label: 'ai_started' });
           const modelPrompt = fileText ? `${prompt}\n\nVoici le contenu CSV du fichier joint. Utilise-le comme source de vérité et conserve les données utiles dans le classeur :\n\n${fileText}` : prompt;
-          const result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt: modelPrompt, model: selection.model, effort: selection.effort, fileName });
+          const result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt: modelPrompt, model: selection.model, effort: selection.effort, fileName, baseWorkbook });
           send('stage', { stage: 3, label: 'workbook_received' });
           send('stage', { stage: 4, label: 'result_saved' });
           await finishGeneration(env, generationId, 'completed', result.workbook, result.usage);
@@ -496,11 +497,12 @@ export async function handleApi(request, env) {
     try { body = await request.json(); } catch { return json({ error: 'Corps de requête invalide.' }, 400); }
     const prompt = String(body.prompt || '').trim();
     const fileText = String(body.fileText || '').slice(0, 12000);
+    const baseWorkbook = body.baseWorkbook && typeof body.baseWorkbook === 'object' ? body.baseWorkbook : null;
     const user = await authenticatedUser(env, request);
     if (!user) return json({ error: 'Connecte-toi pour générer un fichier.' }, 401);
     const sessionId = user.id;
     if (!prompt || prompt.length > 6000) return json({ error: 'La demande doit contenir entre 1 et 6000 caractères.' }, 400);
-    if (request.headers.get('accept')?.includes('text/event-stream')) return generationStream(env, { sessionId, prompt, fileName: String(body.fileName || '').slice(0, 255), fileText });
+    if (request.headers.get('accept')?.includes('text/event-stream')) return generationStream(env, { sessionId, prompt, fileName: String(body.fileName || '').slice(0, 255), fileText, baseWorkbook });
     const entitlement = await getEntitlement(env, sessionId);
     const selection = chooseModel(prompt, entitlement.plan.slug, body.mode);
     let generationId;
@@ -508,7 +510,7 @@ export async function handleApi(request, env) {
     if (env.SUPABASE_URL && !generationId) return json({ error: 'Ton quota de générations est atteint. Choisis un plan ou attends son renouvellement.' }, 429);
     try {
       const modelPrompt = fileText ? `${prompt}\n\nVoici le contenu CSV du fichier joint. Utilise-le comme source de vérité et conserve les données utiles dans le classeur :\n\n${fileText}` : prompt;
-      const result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt: modelPrompt, model: selection.model, effort: selection.effort, fileName: String(body.fileName || '').slice(0, 255) });
+      const result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt: modelPrompt, model: selection.model, effort: selection.effort, fileName: String(body.fileName || '').slice(0, 255), baseWorkbook });
       await finishGeneration(env, generationId, 'completed', result.workbook, result.usage);
       const used = await usageCount(env, sessionId, entitlement.plan.slug);
       return json({ workbook: result.workbook, account: { plan: entitlement.plan.slug, generationLimit: entitlement.plan.generationLimit, used, remaining: Math.max(0, entitlement.plan.generationLimit - used) } });
