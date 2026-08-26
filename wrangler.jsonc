@@ -2,7 +2,11 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "huggy-excel",
   "main": "worker.mjs",
-  "compatibility_date": "2026-08-25",
+  "compatibility_date": "2026-08-26",
+  "routes": [
+    { "pattern": "huggy.fun", "custom_domain": true },
+    { "pattern": "www.huggy.fun", "custom_domain": true }
+  ],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",

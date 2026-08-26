@@ -1,6 +1,6 @@
 # Huggy Excel
 
-Générateur de classeurs piloté par Claude via OpenRouter, avec catalogue de plans et persistance Supabase.
+Générateur de classeurs assisté par IA, avec paiements Chariow, quotas serveur et persistance Supabase.
 
 ## Développement local
 
@@ -20,23 +20,24 @@ Les secrets de production sont enregistrés dans Cloudflare Workers, jamais dans
 - `OPENROUTER_API_KEY`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `CHARIOW_API_KEY`
+- `CHARIOW_WEBHOOK_SECRET`
+- les six identifiants `CHARIOW_PRODUCT_*`
 
 La clé `SUPABASE_SERVICE_ROLE_KEY` doit rester strictement côté Worker. Elle ne doit jamais être exposée dans `app.js`, dans le navigateur ou dans une variable `NEXT_PUBLIC_*`.
 
-## Modèles IA et routage
+## Génération et contrôle des coûts
 
-- demandes courantes : `anthropic/claude-sonnet-5` ;
-- tâches très rapides : `anthropic/claude-haiku-4.5` ;
-- tâches complexes ou Business : `anthropic/claude-opus-5`.
-
-Les demandes sont validées par le serveur et le résultat structuré est enregistré dans Supabase.
+Les droits et le routage de capacité sont déterminés exclusivement par le Worker. Le navigateur ne choisit ni le niveau de service ni le quota. Chaque génération est réservée atomiquement dans Supabase avant l’appel au fournisseur, puis marquée comme terminée ou échouée.
 
 ## Plans
 
-Le catalogue est synchronisé dans `public.plans` : Free, Starter (9,90 €/mois), Pro (24,90 €/mois) et Business (79 €/mois). L’endpoint d’abonnement enregistre une demande `pending_checkout`; un prestataire de paiement doit encore être relié pour activer la facturation réelle.
+Le catalogue est synchronisé dans `public.plans` : Free (1 génération), Starter (4 900 FCFA/mois ou 46 900 FCFA/an), Pro (14 900 FCFA/mois ou 142 900 FCFA/an) et Business (59 900 FCFA/mois ou 574 900 FCFA/an).
+
+Le paiement crée une commande Chariow. Le Pulse signé active automatiquement le droit dans `public.subscriptions`; les quotas payants sont renouvelés chaque mois tant que la licence reste valide.
 
 ## Cloudflare
 
 Le Worker de production est `huggy-excel`. Le dépôt contient `wrangler.jsonc`, `worker.mjs`, `api.mjs` et `public/` pour les redéploiements Wrangler.
 
-Le domaine racine `huggy.fun/*` est routé vers le Worker. Le DNS de `huggy.fun` utilise actuellement des serveurs de noms externes ; pour rendre le domaine racine publiquement actif via Cloudflare, les serveurs de noms du registrar doivent être remplacés par `martha.ns.cloudflare.com` et `stanley.ns.cloudflare.com`. Le sous-domaine `www` existant n’a pas été modifié.
+Les domaines personnalisés `huggy.fun` et `www.huggy.fun` sont déclarés dans `wrangler.jsonc`. Le webhook Chariow reste sur l’URL stable `workers.dev` afin d’être indépendant d’un changement DNS du domaine commercial.
