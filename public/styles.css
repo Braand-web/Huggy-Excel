@@ -203,6 +203,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .checkout-error { color:#b3442d !important; }
 .auth-modal { width: min(430px,100%); }
 .auth-modal form { display:grid; gap:10px; }
+.google-button { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 42px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); font-weight: 600; }
+.google-button:hover { border-color: #bdb6ac; background: #fffdfb; }
+.google-g { color: #4285f4; font-size: 18px; font-weight: 700; font-family: Arial, sans-serif; }
+.auth-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0; color: #9b968e; font-size: 11px; }
+.auth-divider::before, .auth-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
 .auth-modal label { display:grid; gap:5px; color:var(--soft); font-size:12px; }
 .auth-modal input { width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:8px; padding:10px 11px; background:var(--paper); color:var(--ink); font:inherit; }
 .auth-message { color:#25613a !important; font-size:12px; }
