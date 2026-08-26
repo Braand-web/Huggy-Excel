@@ -62,10 +62,10 @@ revoke execute on function public.rls_auto_enable() from public, anon, authentic
 
 insert into public.plans (slug, name, monthly_price_cents, generation_limit, model, effort, features, sort_order)
 values
-  ('free', 'Free', 0, 3, 'anthropic/claude-sonnet-5', 'low', '["3 générations par mois","Aperçu des classeurs","Exports limités"]'::jsonb, 0),
+  ('free', 'Free', 0, 1, 'anthropic/claude-sonnet-5', 'low', '["1 génération","Aperçu des classeurs","Exports limités"]'::jsonb, 0),
   ('starter', 'Starter', 990, 50, 'anthropic/claude-sonnet-5', 'medium', '["50 générations par mois","Création et modification Excel","Exports CSV/XLSX"]'::jsonb, 1),
-  ('pro', 'Pro', 2490, 250, 'anthropic/claude-sonnet-5', 'high', '["250 générations par mois","Formules et tableaux avancés","10 générations Opus incluses"]'::jsonb, 2),
-  ('business', 'Business', 7900, 1000, 'anthropic/claude-opus-5', 'high', '["1 000 générations par mois","Opus prioritaire","Support et espaces partagés"]'::jsonb, 3)
+  ('pro', 'Pro', 2490, 250, 'anthropic/claude-sonnet-5', 'high', '["250 générations par mois","Tableaux de bord avancés","Traitement prioritaire"]'::jsonb, 2),
+  ('business', 'Business', 7900, 1000, 'anthropic/claude-opus-5', 'high', '["1 000 générations par mois","Traitement haute capacité","Support et espaces partagés"]'::jsonb, 3)
 on conflict (slug) do update set
   name = excluded.name,
   monthly_price_cents = excluded.monthly_price_cents,

@@ -1,8 +1,8 @@
 const PLAN_CATALOG = [
-  { slug: 'free', name: 'Free', monthlyPriceCents: 0, generationLimit: 3, model: 'anthropic/claude-sonnet-5', effort: 'low', features: ['3 générations par mois', 'Aperçu des classeurs', 'Exports limités'], sortOrder: 0 },
+  { slug: 'free', name: 'Free', monthlyPriceCents: 0, generationLimit: 1, model: 'anthropic/claude-sonnet-5', effort: 'low', features: ['1 génération', 'Aperçu des classeurs', 'Exports limités'], sortOrder: 0 },
   { slug: 'starter', name: 'Starter', monthlyPriceCents: 990, generationLimit: 50, model: 'anthropic/claude-sonnet-5', effort: 'medium', features: ['50 générations par mois', 'Création et modification Excel', 'Exports CSV/XLSX'], sortOrder: 1 },
-  { slug: 'pro', name: 'Pro', monthlyPriceCents: 2490, generationLimit: 250, model: 'anthropic/claude-sonnet-5', effort: 'high', features: ['250 générations par mois', 'Formules et tableaux avancés', '10 générations Opus incluses'], sortOrder: 2 },
-  { slug: 'business', name: 'Business', monthlyPriceCents: 7900, generationLimit: 1000, model: 'anthropic/claude-opus-5', effort: 'high', features: ['1 000 générations par mois', 'Opus prioritaire', 'Support et espaces partagés'], sortOrder: 3 },
+  { slug: 'pro', name: 'Pro', monthlyPriceCents: 2490, generationLimit: 250, model: 'anthropic/claude-sonnet-5', effort: 'high', features: ['250 générations par mois', 'Tableaux de bord avancés', 'Traitement prioritaire'], sortOrder: 2 },
+  { slug: 'business', name: 'Business', monthlyPriceCents: 7900, generationLimit: 1000, model: 'anthropic/claude-opus-5', effort: 'high', features: ['1 000 générations par mois', 'Traitement haute capacité', 'Support et espaces partagés'], sortOrder: 3 },
 ];
 
 const SYSTEM_PROMPT = `Tu es Huggy Excel, un agent spécialisé dans la création de classeurs utiles et vérifiables. À partir de la demande de l'utilisateur, retourne uniquement un objet JSON valide avec cette structure :
@@ -77,9 +77,9 @@ export async function handleApi(request, env) {
   if (url.pathname === '/api/plans' && request.method === 'GET') {
     let plans = PLAN_CATALOG;
     if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
-      try { const response = await fetch(`${env.SUPABASE_URL}/rest/v1/plans?select=slug,name,monthly_price_cents,generation_limit,model,effort,features&active=eq.true&order=sort_order.asc`, { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }); if (response.ok) { const remote = await response.json(); if (remote.length) plans = remote.map(item => ({ ...item, monthlyPriceCents: item.monthly_price_cents, generationLimit: item.generation_limit })); } } catch { /* Use the checked-in catalog when Supabase is unavailable. */ }
+      try { const response = await fetch(`${env.SUPABASE_URL}/rest/v1/plans?select=slug,name,monthly_price_cents,generation_limit,features&active=eq.true&order=sort_order.asc`, { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }); if (response.ok) { const remote = await response.json(); if (remote.length) plans = remote.map(item => ({ slug: item.slug, name: item.name, monthlyPriceCents: item.monthly_price_cents, generationLimit: item.generation_limit, features: item.features })); } } catch { /* Use the checked-in catalog when Supabase is unavailable. */ }
     }
-    return json({ plans });
+    return json({ plans: plans.map(({ slug, name, monthlyPriceCents, generationLimit, features }) => ({ slug, name, monthlyPriceCents, generationLimit, features })) });
   }
   if (url.pathname === '/api/generate' && request.method === 'POST') {
     let body;
@@ -90,7 +90,7 @@ export async function handleApi(request, env) {
     let result;
     try { result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt, model: selection.model, effort: selection.effort, fileName: String(body.fileName || '') }); } catch (error) { return json({ error: error.message || 'Impossible de contacter le modèle IA.' }, 502); }
     await persist(env, 'generations', { session_id: String(body.sessionId || 'anonymous'), prompt, model: selection.model, effort: selection.effort, status: 'completed', result: result.workbook });
-    return json({ model: selection.model, effort: selection.effort, workbook: result.workbook, usage: result.usage });
+    return json({ workbook: result.workbook });
   }
   if (url.pathname === '/api/subscribe' && request.method === 'POST') {
     let body;
