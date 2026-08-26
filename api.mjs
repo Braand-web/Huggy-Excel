@@ -245,6 +245,7 @@ export async function handleApi(request, env) {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Corps de requête invalide.' }, 400); }
     const prompt = String(body.prompt || '').trim();
+    const fileText = String(body.fileText || '').slice(0, 12000);
     const user = await authenticatedUser(env, request);
     if (!user) return json({ error: 'Connecte-toi pour générer un fichier.' }, 401);
     const sessionId = user.id;
@@ -255,7 +256,8 @@ export async function handleApi(request, env) {
     try { generationId = await claimGeneration(env, { sessionId, plan: entitlement.plan, prompt, model: selection.model, effort: selection.effort }); } catch (error) { return json({ error: error.message }, 503); }
     if (env.SUPABASE_URL && !generationId) return json({ error: 'Ton quota de générations est atteint. Choisis un plan ou attends son renouvellement.' }, 429);
     try {
-      const result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt, model: selection.model, effort: selection.effort, fileName: String(body.fileName || '').slice(0, 255) });
+      const modelPrompt = fileText ? `${prompt}\n\nVoici le contenu CSV du fichier joint. Utilise-le comme source de vérité et conserve les données utiles dans le classeur :\n\n${fileText}` : prompt;
+      const result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt: modelPrompt, model: selection.model, effort: selection.effort, fileName: String(body.fileName || '').slice(0, 255) });
       await finishGeneration(env, generationId, 'completed', result.workbook, result.usage);
       const used = await usageCount(env, sessionId, entitlement.plan.slug);
       return json({ workbook: result.workbook, account: { plan: entitlement.plan.slug, generationLimit: entitlement.plan.generationLimit, used, remaining: Math.max(0, entitlement.plan.generationLimit - used) } });

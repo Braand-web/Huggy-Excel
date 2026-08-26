@@ -175,6 +175,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .auth-modal input { width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:8px; padding:10px 11px; background:var(--paper); color:var(--ink); font:inherit; }
 .auth-message { color:#25613a !important; font-size:12px; }
 .auth-switch { border:0; background:transparent; padding:0; margin-top:4px; }
+.checkout-hint { color:var(--soft); font-size:12px; margin:0 0 4px; }
 .billing { display: flex; gap: 6px; margin: 16px 0; }
 .billing button { border: 1px solid var(--line); background: white; border-radius: 999px; padding: 7px 11px; font-size: 12px; }
 .billing button.active { background: var(--ink); color: white; }
