@@ -282,7 +282,18 @@ export async function handleApi(request, env) {
     if (!productId) return json({ error: 'Cette offre n’est pas encore configurée.' }, 503);
     const pending = await persist(env, 'subscriptions', { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing, status: 'pending_checkout', provider: 'chariow', provider_product_id: productId, customer_email: email });
     if (env.SUPABASE_URL && !pending) return json({ error: 'Impossible d’enregistrer la commande.' }, 503);
-    return json({ checkoutUrl: `https://gerepwmw.mychariow.shop/${productId}`, step: 'chariow_storefront', customerEmail: email });
+    const metadata = user.user_metadata || {};
+    const firstName = String(metadata.first_name || metadata.firstName || '').trim();
+    const lastName = String(metadata.last_name || metadata.lastName || '').trim();
+    const phoneNumber = String(metadata.phone || '').replace(/\D/g, '');
+    const countryCode = String(metadata.country_code || 'CI').trim().toUpperCase();
+    if (!firstName || !lastName || phoneNumber.length < 6 || !/^[A-Z]{2}$/.test(countryCode)) return json({ error: 'Complète ton profil avec ton prénom, ton nom et ton téléphone avant de payer.' }, 400);
+    try {
+      const result = await chariowRequest(env, '/checkout', { method: 'POST', body: JSON.stringify({ product_id: productId, email, first_name: firstName, last_name: lastName, phone: { number: phoneNumber, country_code: countryCode }, redirect_url: 'https://huggy.fun/?checkout=success', custom_metadata: { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing } }) });
+      const checkoutUrl = result.data?.payment?.checkout_url || result.data?.checkout_url || null;
+      if (!checkoutUrl) throw new Error('Lien de paiement indisponible.');
+      return json({ checkoutUrl, step: result.data?.step || 'payment', customerEmail: email });
+    } catch (error) { return json({ error: error.message || 'Impossible de préparer le paiement.' }, 502); }
   }
 
   return json({ error: 'Route API introuvable.' }, 404);
