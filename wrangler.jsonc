@@ -3,6 +3,7 @@
   "name": "huggy-excel",
   "main": "worker.mjs",
   "compatibility_date": "2026-08-26",
+  "workers_dev": true,
   "routes": [
     { "pattern": "huggy.fun", "custom_domain": true },
     { "pattern": "www.huggy.fun", "custom_domain": true }
