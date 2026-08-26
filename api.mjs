@@ -5,6 +5,12 @@ const PLAN_CATALOG = [
   { slug: 'business', name: 'Business', monthlyPriceCents: 7900, generationLimit: 1000, model: 'anthropic/claude-opus-5', effort: 'high', features: ['1 000 générations par mois', 'Traitement haute capacité', 'Support et espaces partagés'], sortOrder: 3 },
 ];
 
+const BILLING_CATALOG = {
+  starter: { monthly: { amount: 9900, days: 30, env: 'CHARIOW_PRODUCT_STARTER_MONTHLY' }, annual: { amount: 95040, days: 365, env: 'CHARIOW_PRODUCT_STARTER_ANNUAL' } },
+  pro: { monthly: { amount: 24900, days: 30, env: 'CHARIOW_PRODUCT_PRO_MONTHLY' }, annual: { amount: 239040, days: 365, env: 'CHARIOW_PRODUCT_PRO_ANNUAL' } },
+  business: { monthly: { amount: 79000, days: 30, env: 'CHARIOW_PRODUCT_BUSINESS_MONTHLY' }, annual: { amount: 758400, days: 365, env: 'CHARIOW_PRODUCT_BUSINESS_ANNUAL' } },
+};
+
 const SYSTEM_PROMPT = `Tu es Huggy Excel, un agent spécialisé dans la création de classeurs utiles et vérifiables. À partir de la demande de l'utilisateur, retourne uniquement un objet JSON valide avec cette structure :
 {
   "title": "nom court du classeur",
@@ -65,8 +71,86 @@ async function callOpenRouter({ apiKey, prompt, model, effort, fileName }) {
 async function persist(env, table, row) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return;
   try {
-    await fetch(`${env.SUPABASE_URL}/rest/v1/${table}`, { method: 'POST', headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'content-type': 'application/json', prefer: 'return=minimal' }, body: JSON.stringify(row) });
+    const response = await fetch(`${env.SUPABASE_URL}/rest/v1/${table}`, { method: 'POST', headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'content-type': 'application/json', prefer: 'return=representation' }, body: JSON.stringify(row) });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return Array.isArray(data) ? data[0] : data;
   } catch { /* Persistence must not make a successful generation fail. */ }
+}
+
+function chariowProductId(env, planSlug, billing) { const item = BILLING_CATALOG[planSlug]?.[billing]; return item ? env[item.env] : ''; }
+function planForProduct(env, productId) { return Object.entries(BILLING_CATALOG).flatMap(([plan, cycles]) => Object.entries(cycles).map(([billing, item]) => ({ plan, billing, id: env[item.env] }))).find(item => item.id && item.id === productId) || null; }
+
+async function chariowRequest(env, path, options = {}) {
+  if (!env.CHARIOW_API_KEY) throw new Error('Le paiement Chariow n’est pas configuré.');
+  const response = await fetch(`https://api.chariow.com/v1${path}`, { ...options, headers: { authorization: `Bearer ${env.CHARIOW_API_KEY}`, 'content-type': 'application/json', ...(options.headers || {}) } });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.message || payload.error || `Chariow a répondu avec le statut ${response.status}.`);
+  return payload;
+}
+
+async function updateSubscription(env, lookup, changes) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return;
+  const params = Object.entries(lookup).map(([key, value]) => `${key}=eq.${encodeURIComponent(value)}`).join('&');
+  try {
+    const list = await fetch(`${env.SUPABASE_URL}/rest/v1/subscriptions?select=id&${params}&order=created_at.desc&limit=1`, { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
+    if (!list.ok) return;
+    const rows = await list.json();
+    if (!rows[0]?.id) return;
+    await fetch(`${env.SUPABASE_URL}/rest/v1/subscriptions?id=eq.${rows[0].id}`, { method: 'PATCH', headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'content-type': 'application/json', prefer: 'return=minimal' }, body: JSON.stringify({ ...changes, updated_at: new Date().toISOString() }) });
+  } catch { /* Webhook processing remains idempotent if a secondary update fails. */ }
+}
+
+async function claimWebhookDelivery(env, deliveryId, event, payload) {
+  if (!deliveryId || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return true;
+  try {
+    const response = await fetch(`${env.SUPABASE_URL}/rest/v1/billing_webhook_events`, { method: 'POST', headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'content-type': 'application/json', prefer: 'return=minimal' }, body: JSON.stringify({ delivery_id: deliveryId, event, payload }) });
+    if (response.status === 409) return 'duplicate';
+    return response.ok;
+  } catch { return false; }
+}
+
+async function verifyChariowSignature(rawBody, signature, secret) {
+  if (!secret || !signature?.startsWith('sha256=')) return false;
+  const expected = signature.slice(7);
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const digest = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody));
+  const actual = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return actual.length === expected.length && [...actual].every((char, index) => char === expected[index]);
+}
+
+async function handleChariowWebhook(request, env) {
+  const rawBody = await request.text();
+  if (!await verifyChariowSignature(rawBody, request.headers.get('x-chariow-signature'), env.CHARIOW_WEBHOOK_SECRET)) return json({ error: 'Signature webhook invalide.' }, 401);
+  let payload;
+  try { payload = JSON.parse(rawBody); } catch { return json({ error: 'Charge utile webhook invalide.' }, 400); }
+  const event = String(payload.event || '');
+  const deliveryId = request.headers.get('x-pulse-delivery-id') || '';
+  const delivery = await claimWebhookDelivery(env, deliveryId, event, payload);
+  if (delivery === 'duplicate') return json({ ok: true, duplicate: true });
+  if (!delivery) return json({ error: 'Événement webhook non enregistré.' }, 500);
+  const productId = payload.product?.id || '';
+  const product = planForProduct(env, productId);
+  const metadata = payload.sale?.custom_metadata || {};
+  const customerEmail = payload.customer?.email || '';
+  const sessionId = String(metadata.session_id || '');
+  const lookup = sessionId ? { session_id: sessionId } : customerEmail ? { customer_email: customerEmail } : null;
+  if (lookup && product) {
+    const license = payload.license || {};
+    const active = ['successful.sale', 'license.issued', 'license.activated'].includes(event);
+    const expired = ['license.expired', 'license.revoked'].includes(event);
+    await updateSubscription(env, { ...lookup, plan_slug: product.plan, billing_cycle: product.billing }, {
+      status: active ? 'active' : expired ? 'cancelled' : 'pending_checkout',
+      provider: 'chariow',
+      provider_product_id: productId,
+      provider_sale_id: payload.sale?.id || null,
+      provider_license_id: license.id || null,
+      license_status: license.status || null,
+      license_expires_at: license.expires_at || null,
+      customer_email: customerEmail || null,
+    });
+  }
+  return json({ ok: true });
 }
 
 export async function handleApi(request, env) {
@@ -74,6 +158,7 @@ export async function handleApi(request, env) {
   if (!url.pathname.startsWith('/api/')) return null;
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type' } });
   if (url.pathname === '/api/health' && request.method === 'GET') return json({ ok: true, service: 'huggy-excel', provider: 'openrouter', configured: Boolean(env.OPENROUTER_API_KEY) });
+  if (url.pathname === '/api/webhooks/chariow' && request.method === 'POST') return handleChariowWebhook(request, env);
   if (url.pathname === '/api/plans' && request.method === 'GET') {
     let plans = PLAN_CATALOG;
     if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -91,6 +176,27 @@ export async function handleApi(request, env) {
     try { result = await callOpenRouter({ apiKey: env.OPENROUTER_API_KEY, prompt, model: selection.model, effort: selection.effort, fileName: String(body.fileName || '') }); } catch (error) { return json({ error: error.message || 'Impossible de contacter le modèle IA.' }, 502); }
     await persist(env, 'generations', { session_id: String(body.sessionId || 'anonymous'), prompt, model: selection.model, effort: selection.effort, status: 'completed', result: result.workbook });
     return json({ workbook: result.workbook });
+  }
+  if (url.pathname === '/api/checkout' && request.method === 'POST') {
+    let body;
+    try { body = await request.json(); } catch { return json({ error: 'Corps de requête invalide.' }, 400); }
+    const planSlug = String(body.plan || '');
+    const billing = body.billing === 'annual' ? 'annual' : 'monthly';
+    const offer = BILLING_CATALOG[planSlug]?.[billing];
+    const email = String(body.email || '').trim().toLowerCase();
+    const firstName = String(body.firstName || '').trim();
+    const lastName = String(body.lastName || '').trim();
+    const phoneNumber = String(body.phoneNumber || '').replace(/\D/g, '');
+    const countryCode = String(body.countryCode || 'FR').trim().toUpperCase();
+    if (!offer || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !firstName || !lastName || !phoneNumber) return json({ error: 'Renseigne tes coordonnées de paiement.' }, 400);
+    const productId = chariowProductId(env, planSlug, billing);
+    if (!productId) return json({ error: 'Cette offre n’est pas encore configurée.' }, 503);
+    const sessionId = String(body.sessionId || 'anonymous');
+    await persist(env, 'subscriptions', { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing, status: 'pending_checkout', provider: 'chariow', provider_product_id: productId, customer_email: email });
+    try {
+      const result = await chariowRequest(env, '/checkout', { method: 'POST', body: JSON.stringify({ product_id: productId, email, first_name: firstName, last_name: lastName, phone: { number: phoneNumber, country_code: countryCode }, redirect_url: 'https://huggy.fun/?checkout=success', custom_metadata: { session_id: sessionId, plan_slug: planSlug, billing_cycle: billing } }) });
+      return json({ checkoutUrl: result.data?.payment?.checkout_url || result.data?.checkout_url || null, step: result.data?.step || null });
+    } catch (error) { return json({ error: error.message || 'Impossible de préparer le paiement.' }, 502); }
   }
   if (url.pathname === '/api/subscribe' && request.method === 'POST') {
     let body;

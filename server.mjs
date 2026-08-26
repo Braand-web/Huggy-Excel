@@ -7,7 +7,7 @@ import { handleApi } from './api.mjs';
 const root = fileURLToPath(new URL('.', import.meta.url));
 const staticRoot = join(root, 'public');
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8' };
-const env = { OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY, SUPABASE_URL: process.env.SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY };
+const env = { OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY, SUPABASE_URL: process.env.SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY, CHARIOW_API_KEY: process.env.CHARIOW_API_KEY, CHARIOW_WEBHOOK_SECRET: process.env.CHARIOW_WEBHOOK_SECRET, CHARIOW_PRODUCT_STARTER_MONTHLY: process.env.CHARIOW_PRODUCT_STARTER_MONTHLY, CHARIOW_PRODUCT_STARTER_ANNUAL: process.env.CHARIOW_PRODUCT_STARTER_ANNUAL, CHARIOW_PRODUCT_PRO_MONTHLY: process.env.CHARIOW_PRODUCT_PRO_MONTHLY, CHARIOW_PRODUCT_PRO_ANNUAL: process.env.CHARIOW_PRODUCT_PRO_ANNUAL, CHARIOW_PRODUCT_BUSINESS_MONTHLY: process.env.CHARIOW_PRODUCT_BUSINESS_MONTHLY, CHARIOW_PRODUCT_BUSINESS_ANNUAL: process.env.CHARIOW_PRODUCT_BUSINESS_ANNUAL };
 
 createServer(async (req, res) => {
   try {
