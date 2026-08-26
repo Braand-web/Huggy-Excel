@@ -374,7 +374,10 @@ async function handleChariowWebhook(request, env) {
   const delivery = await claimWebhookDelivery(env, deliveryId, event, payload);
   if (delivery.duplicate) return json({ ok: true, duplicate: true });
   if (!delivery.claimed) return json({ error: 'Événement webhook non enregistré.' }, 500);
-  if (!deliveryId && payload.note) return json({ ok: true, test: true });
+  if (payload.note) {
+    await finishWebhookDelivery(env, deliveryId);
+    return json({ ok: true, test: true });
+  }
 
   try {
     const data = payload.data || payload;

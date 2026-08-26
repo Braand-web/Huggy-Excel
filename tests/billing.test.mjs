@@ -121,10 +121,11 @@ try {
   const testPayload = JSON.stringify({ event: 'successful.sale', note: 'This is a test pulse', product: { id: 'prd_starter_monthly' }, customer: { email: user.email } });
   const testSignature = `sha256=${createHmac('sha256', env.CHARIOW_WEBHOOK_SECRET).update(testPayload).digest('hex')}`;
   const testPulse = await handleApi(new Request('https://huggy.fun/api/webhooks/chariow', {
-    method: 'POST', headers: { 'content-type': 'application/json', 'x-chariow-signature': testSignature }, body: testPayload,
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-chariow-signature': testSignature, 'x-pulse-delivery-id': 'delivery_huggy_test' }, body: testPayload,
   }), env);
   assert.deepEqual(await testPulse.json(), { ok: true, test: true });
   assert.equal(subscriptions.length, 1);
+  assert.ok(deliveries.find(item => item.delivery_id === 'delivery_huggy_test')?.processed_at);
 
   console.log('Billing test passed: checkout, sale reconciliation, idempotency and test pulses are safe.');
 } finally {
